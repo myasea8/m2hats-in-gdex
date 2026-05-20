@@ -6,7 +6,7 @@ Below are the datasets collected by EOL during M2HATS and currently hosted on EO
 - **Sample rate:** 5 minutes
 - **Coordinates:** Tilt corrected
 - **Size:** 140 MB
-- **File type:** 
+- **File type:** NetCDF-3 Classic
 - **Proposed changes:** 
 - **Status:** INCOMPLETE
 
@@ -51,3 +51,4 @@ Below are the datasets collected by EOL during M2HATS and currently hosted on EO
 ## MicroPulse Differential Absorption Lidar (MPD) dataset
 
 ## ISS Radiosonde dataset
+NetCDF-3 Classic
