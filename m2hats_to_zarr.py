@@ -62,10 +62,17 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+import zarr as _zarr
+_ZARR_V3 = int(_zarr.__version__.split(".")[0]) >= 3
+
 try:
-    from numcodecs import Blosc
-    _COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.SHUFFLE)
-except ImportError:           # numcodecs is bundled with zarr; fallback to None
+    if _ZARR_V3:
+        from zarr.codecs import BloscCodec
+        _COMPRESSOR = BloscCodec(cname="zstd", clevel=3)
+    else:
+        from numcodecs import Blosc
+        _COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.SHUFFLE)
+except (ImportError, AttributeError):
     _COMPRESSOR = None
 
 
@@ -80,6 +87,7 @@ except ImportError:           # numcodecs is bundled with zarr; fallback to None
 ARRAY_SITES: dict[str, tuple[float, float, float]] = {
     "t0p": (4.484, -117.0742621, 38.04264114),
     "t1":  (4.524, -117.0742073, 38.04264879),
+    "t1p": (4.524, -117.0742073, 38.04264879),  # same location as t1; pre-swap CSAT3 epoch
     "t2":  (4.539, -117.0741494, 38.04265703),
     "t3":  (4.562, -117.0740934, 38.04266465),
     "t4":  (4.637, -117.0740379, 38.04267236),
@@ -144,10 +152,11 @@ T0_PROFILE: dict[float, tuple[float, float, float]] = {
 
 # Appendix A: CSAT model at each array tower. We split into a "configuration"
 # string so users can filter (e.g. ds.where(ds.csat_model.str.contains("EC150"))).
-# t1 swapped CSAT3 -> CSAT3A on 2023-08-08 13:00 UTC; we record the late
+# t1 swapped CSAT3 -> CSAT3A on 2023-08-23 13:00 UTC; we record the late
 # configuration as primary and note the swap in `csat_model_note`.
 CSAT_MODEL: dict[str, str] = {
-    "t0p": "CSAT3A",        "t1":  "CSAT3A",      "t2":  "CSAT3A+EC150",
+    "t0p": "CSAT3A",        "t1":  "CSAT3A",      "t1p": "CSAT3",
+    "t2":  "CSAT3A+EC150",
     "t3":  "CSAT3",         "t4":  "CSAT3",       "t5":  "CSAT3A+EC150",
     "t6":  "CSAT3B",        "t7":  "CSAT3",       "t8":  "CSAT3A+EC150",
     "t9":  "CSAT3A",        "t10": "CSAT3",       "t11": "CSAT3A+EC150",
@@ -349,12 +358,11 @@ def classify(p: ParsedName, source_dims: tuple[str, ...]) -> str | None:
 # ===========================================================================
 
 def _site_sort_key(site: str) -> tuple:
-    """Sort 't0p' before 't1', then numerically."""
-    if site == "t0p":
-        return (0, -1)
-    if site == "t0":
-        return (-1, 0)
-    return (1, int(site[1:]))
+    """Sort t0 first, t0p second, then t1..t49 numerically; p-suffix sorts before non-p peer."""
+    has_p = site.endswith('p')
+    num = int(site[1:-1] if has_p else site[1:])
+    first = -1 if site == "t0" else (0 if num == 0 else 1)
+    return (first, num, 0 if has_p else 1)
 
 
 def _sample_offset_da(sample_dim: str, rate_hz: int) -> xr.DataArray:
