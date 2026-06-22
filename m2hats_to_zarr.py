@@ -16,6 +16,18 @@ Typical use
     restructure_m2hats(ds, output_path="m2hats.zarr",
                       tilt_corrected=True)
 
+Preprocessing
+-------------
+Pass ``fix_time_and_t1`` as ``preprocess`` to ``xr.open_mfdataset`` to fix
+timestamps and handle the mid-campaign t1 sonic swap before concatenation:
+
+    from m2hats_to_zarr import fix_time_and_t1
+
+    ds = xr.open_mfdataset(
+        files, preprocess=fix_time_and_t1,
+        combine="nested", concat_dim="time", parallel=True,
+    )
+
 Output layout (DataTree, written as Zarr groups)
 ------------------------------------------------
     m2hats.zarr/
@@ -61,6 +73,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import xarray as xr
+import dask.array as da
 
 import zarr as _zarr
 _ZARR_V3 = int(_zarr.__version__.split(".")[0]) >= 3
@@ -256,6 +269,74 @@ BARO_VARS   = {"P"}
 
 # Source fill value used by NIDAS-produced ISFS netCDF files.
 NIDAS_FILL_VALUE = 1.0e37
+
+
+# ===========================================================================
+# Source file preprocessing
+# ===========================================================================
+
+# Matches sonic variable names at site t1 (e.g. u_4m_t1, tc_4m_t1).
+_T1_RE = re.compile(r'^(u|v|w|tc|ldiag|diagbits|diag)_.+_t1$')
+
+
+def fix_time(ds: xr.Dataset) -> xr.Dataset:
+    """Override `time` with base_time + within-hour offset.
+
+    M2HATS high-rate files store `time` as 'seconds within hour 0 of the
+    file's day' rather than absolute, and `base_time` holds the hour offset.
+    Defensive: if base_time is missing, or if `time` already exceeds the
+    hour-0 range (meaning the file is already correctly decoded), pass
+    through unchanged.
+    """
+    if "base_time" not in ds.variables:
+        return ds
+    if (ds["time"].dt.hour > 0).any():
+        return ds.drop_vars("base_time", errors="ignore")
+    base = ds["base_time"]
+    tod = ds["time"] - ds["time"].dt.floor("D")
+    return ds.assign_coords(time=base + tod).drop_vars("base_time")
+
+
+def fix_time_and_t1(ds: xr.Dataset) -> xr.Dataset:
+    """Apply fix_time and insert NaN placeholders for the t1 sonic swap.
+
+    Before 2023-08-23T13:00Z site t1 held a CSAT3 (30 Hz); after that it
+    was replaced by a CSAT3A (60 Hz). To allow both periods to concatenate
+    cleanly, each file receives NaN-padded placeholder columns for whichever
+    period it does not cover:
+      - pre-swap files:  real data on sample_30 renamed to t1p;
+                         NaN slab added on sample as t1
+      - post-swap files: real data on sample as t1;
+                         NaN slab added on sample_30 as t1p
+
+    Designed to be passed as ``preprocess`` to ``xr.open_mfdataset``.
+    """
+    ds = fix_time(ds)
+
+    pre_swap  = [v for v in ds.data_vars if _T1_RE.match(v) and 'sample_30' in ds[v].dims]
+    post_swap = [v for v in ds.data_vars if _T1_RE.match(v) and 'sample'    in ds[v].dims]
+
+    if pre_swap:
+        # Rename t1 -> t1p for the real data
+        ds = ds.rename({v: re.sub(r'_t1$', '_t1p', v) for v in pre_swap})
+        # Add NaN placeholder for post-swap t1 on 'sample' dim
+        nt = ds.sizes['time']
+        for v in pre_swap:
+            ds[v] = xr.DataArray(
+                da.full((nt, 60), np.nan, dtype='float32', chunks=(nt, 60)),
+                dims=('time', 'sample'),
+            )
+
+    if post_swap:
+        # Add NaN placeholder for pre-swap t1p on 'sample_30' dim
+        nt = ds.sizes['time']
+        for v in post_swap:
+            ds[re.sub(r'_t1$', '_t1p', v)] = xr.DataArray(
+                da.full((nt, 30), np.nan, dtype='float32', chunks=(nt, 30)),
+                dims=('time', 'sample_30'),
+            )
+
+    return ds
 
 
 # ===========================================================================

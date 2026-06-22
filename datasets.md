@@ -16,7 +16,7 @@ Below are the datasets collected by EOL during M2HATS and currently hosted on EO
 - **Size:** 252.723 GB
 - **File type:** NetCDF-3 Classic
 - **Proposed changes:** Read in all files together using open_mfdataset, then write to a Zarr store.
-- **Status:** INCOMPLETE
+- **Status:** Complete!
 
 ### isfs_m2hats_qc_geo_tiltcor_hr_2023MM:
 - **Sample rate:** 0.02 to 1 seconds
@@ -35,20 +35,73 @@ Below are the datasets collected by EOL during M2HATS and currently hosted on EO
 - **Status:** 
 
 ## 449 MHz profiler datasets
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## RASS datasets
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## ISS Surface meteorology products
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## Ceilometer Vaisala CL61 dataset
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## Webcam imagery
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## Lidar (Halo) datasets
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## Lidar (Vaisala/Leosphere Windcube) datasets
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## MicroPulse Differential Absorption Lidar (MPD) dataset
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** 
+- **Proposed changes:** 
+- **Status:** 
 
 ## ISS Radiosonde dataset
-NetCDF-3 Classic
+- **Sample rate:** 
+- **Processing:** 
+- **Size:** 
+- **File type:** NetCDF-3 Classic
+- **Proposed changes:** 
+- **Status:** 
