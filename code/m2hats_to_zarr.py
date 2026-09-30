@@ -32,27 +32,31 @@ Output layout (DataTree, written as Zarr groups)
 ------------------------------------------------
     m2hats.zarr/
     |-- array/                          # 50-tower horizontal array, ~4 m
-    |   |-- sonic_60hz                  (time, sample,    site_a)
+    |   |-- sonic_60hz                  (time, sample_60, site_a)
     |   |-- sonic_50hz                  (time, sample_50, site_b)
     |   |-- sonic_30hz                  (time, sample_30, site_c)
-    |   |-- irga_60hz                   (time, sample,    site_irga)
+    |   |-- irga_60hz                   (time, sample_60, site_irga)
     |   |-- barometer_20hz              (time, sample_20, site_irga)
     |   `-- trh_1hz                     (time,            site_irga)
     `-- profile_t0/                     # multi-level tower at t0
-        |-- sonic_60hz                  (time, sample,    height)
-        |-- irga_60hz                   (time, sample,    height)
+        |-- sonic_60hz                  (time, sample_60, height)
+        |-- irga_60hz                   (time, sample_60, height)
         |-- barometer_20hz              (time, sample_20, height)
         `-- trh_1hz                     (time,            height)
 
 Conventions
 -----------
 * All variables get CF `standard_name`, `units`, `long_name`, `_FillValue=NaN`.
+* `time` carries CF `standard_name`/`axis` and marks the center of each bin.
 * Each high-rate group carries a `sample_offset` coord (seconds within the
   outer 1-Hz time bin) so that the true observation time is
   `time + sample_offset`.
+* The source's 60 Hz `sample` dim is renamed `sample_60` in the output so
+  every sub-second dim names its rate (`sample_20/30/50/60`).
 * Each group dimensioned on `time` carries a `valid` flag variable using
   CF flag_values/flag_meanings, encoding the pre-31-July t0 invalidity and
-  the five t0 tower-lowering windows from Table 4 of the data report.
+  the seven t0 maintenance windows (tower lowerings, moves, and battery
+  swaps) from Table 4 of the data report.
 * Source fill value 1.e+37 is converted to NaN before write.
 
 Caveats
@@ -203,6 +207,53 @@ CSAT_RATE_DIM: dict[str, str] = {
     "CSAT3A":        "sample",
     "CSAT3A+EC150":  "sample",
 }
+# Source sample dim -> output sample dim. Only the 60 Hz dim is renamed, so
+# that every output sub-second dim carries its rate.
+OUTPUT_SAMPLE_DIM: dict[str, str] = {"sample": "sample_60"}
+
+# CF metadata for the output `time` coordinate, keyed by bin width (s).
+TIME_BIN_LABEL: dict[int, str] = {1: "1-second bin", 300: "5-minute averaging interval"}
+
+
+def time_attrs(interval_s: int) -> dict:
+    """CF attrs for a bin-centered `time` coordinate of width `interval_s`."""
+    label = TIME_BIN_LABEL[interval_s]
+    return {
+        "standard_name": "time",
+        "long_name": f"Time (UTC) at center of {label}",
+        "axis": "T",
+        "comment": (f"Timestamps mark the center of each {label}; the bin "
+                    f"spans [time - {interval_s / 2:g} s, time + {interval_s / 2:g} s)."),
+    }
+
+
+# Validity flag meanings (index = flag value).
+VALID_FLAG_MEANINGS = "ok t0_pre_31july_relocation t0_tower_lowered t0_battery_swap"
+
+
+def resolve_tilt_corrected(ds: xr.Dataset, tilt_corrected: bool | None) -> bool:
+    """Take the tilt-correction state from the source `wind3d_tilt_correction`
+    global attr, refusing a caller value that contradicts it."""
+    src = ds.attrs.get("wind3d_tilt_correction")
+    if src is None:
+        if tilt_corrected is None:
+            raise ValueError("Source has no wind3d_tilt_correction attr; "
+                             "pass tilt_corrected explicitly.")
+        return tilt_corrected
+    src = bool(int(src))
+    if tilt_corrected is not None and tilt_corrected != src:
+        raise ValueError(f"tilt_corrected={tilt_corrected} contradicts source "
+                         f"wind3d_tilt_correction={int(src)}.")
+    return src
+
+
+def wind_frame_text(tilt_corrected: bool) -> tuple[str, str]:
+    """(title suffix, summary sentence) describing the sonic wind frame."""
+    if tilt_corrected:
+        return ("Geographic Tilt-Corrected Winds",
+                "Sonic winds are in geographic coordinates and tilt corrected.")
+    return ("Geographic Winds Without Tilt Correction",
+            "Sonic winds are in geographic coordinates and NOT tilt corrected.")
 
 # Periods to flag as invalid for t0 (UTC). PDT -> UTC = +7 h.
 # Source: Table 4 (tower lowerings) + p. 8 (early relocation).
@@ -214,6 +265,8 @@ T0_LOWERING_WINDOWS: list[tuple[str, str, int, str]] = [
     ("2023-07-31T19:30", "2023-08-01T00:30", 2, "second_lowering"),
     ("2023-09-03T14:45", "2023-09-03T17:20", 3, "battery_swap"),
     ("2023-09-04T19:00", "2023-09-04T20:30", 2, "third_lowering"),
+    ("2023-09-11T17:30", "2023-09-11T18:50", 2, "fourth_lowering"),
+    ("2023-09-20T07:00", "2023-09-20T15:30", 3, "second_battery_swap"),
 ]
 
 # Variable -> (out_name, units, standard_name_or_None, long_name)
@@ -232,10 +285,11 @@ VAR_METADATA: dict[str, tuple[str, str, str | None, str]] = {
     "tc":       ("sonic_temperature", "degree_C", None,
                  "Virtual air temperature from sonic speed of sound"),
     "ldiag":    ("sonic_qc_flag",     "1",        "status_flag",
-                 "CSAT3 logical diagnostic: 0=OK, 1=any diagbit set"),
+                 "Sonic anemometer logical diagnostic: 0=OK, 1=any diagnostic bit set"),
     "diagbits": ("sonic_diag_bits",   "1",        "status_flag",
-                 "CSAT3 diag bit sum (1=lo sig, 2=hi sig, 4=no lock, "
-                 "8=path diff, 16=skipped samp)"),
+                 "Sonic anemometer diagnostic bit sum (1=low signal, "
+                 "2=high signal, 4=no lock, 8=path difference, "
+                 "16=skipped sample)"),
     "diag":     ("sonic_diag_bits",   "1",        "status_flag",
                  "CSAT3B diagnostic sum"),
     # EC150 open-path IRGA
@@ -482,7 +536,8 @@ def _build_validity_flag(
     Flag values
     -----------
     0  ok
-    1  t0 pre-31-July (towers were being repositioned; profiles unreliable)
+    1  t0_pre_31july_relocation (t0 towers were being repositioned;
+       profiles unreliable)
     2  t0 30 m trailer tower lowered for maintenance
     3  t0 battery swap
 
@@ -503,8 +558,7 @@ def _build_validity_flag(
             "long_name": "Data validity flag",
             "standard_name": "status_flag",
             "flag_values": np.array([0, 1, 2, 3], dtype="int8"),
-            "flag_meanings": "ok pre_31july_towers_moving "
-                             "t0_tower_lowered t0_battery_swap",
+            "flag_meanings": VALID_FLAG_MEANINGS,
             "comment": ("Times with flag != 0 are present but should not be "
                         "used for science. See Table 4 of the M2HATS report."),
         },
@@ -607,8 +661,9 @@ def _stack_array_group(
     }
 
     if sample_dim is not None:
-        rate = {"sample": 60, "sample_50": 50, "sample_30": 30, "sample_20": 20}[sample_dim]
+        rate = SAMPLE_DIM_TO_RATE[sample_dim]
         ds = ds.assign_coords(sample_offset=_sample_offset_da(sample_dim, rate))
+        ds = ds.rename_dims({d: n for d, n in OUTPUT_SAMPLE_DIM.items() if d in ds.dims})
 
     ds["valid"] = _build_validity_flag(ds["time"], is_profile_t0=False)
     ds.attrs.update({
@@ -661,8 +716,9 @@ def _stack_profile_group(
                               "standard_name": "latitude"}
 
     if sample_dim is not None:
-        rate = {"sample": 60, "sample_50": 50, "sample_30": 30, "sample_20": 20}[sample_dim]
+        rate = SAMPLE_DIM_TO_RATE[sample_dim]
         ds = ds.assign_coords(sample_offset=_sample_offset_da(sample_dim, rate))
+        ds = ds.rename_dims({d: n for d, n in OUTPUT_SAMPLE_DIM.items() if d in ds.dims})
 
     ds["valid"] = _build_validity_flag(ds["time"], is_profile_t0=True)
     ds.attrs.update({
@@ -707,7 +763,7 @@ def restructure_m2hats(
     ds: xr.Dataset,
     output_path: str,
     *,
-    tilt_corrected: bool = True,
+    tilt_corrected: bool | None = None,
     time_chunk_seconds: int = 3600,
     write: bool = True,
 ) -> xr.DataTree:
@@ -720,9 +776,10 @@ def restructure_m2hats(
         time, sample, sample_50, sample_30, sample_20.
     output_path : str
         Path for the output `.zarr` store.
-    tilt_corrected : bool, default True
-        Recorded in attrs only. Pass False if your source comes from the
-        non-tiltcor netCDFs.
+    tilt_corrected : bool, optional
+        Recorded in attrs and the title only. Taken from the source
+        `wind3d_tilt_correction` attr when present; a value that contradicts
+        it raises ValueError.
     time_chunk_seconds : int, default 3600
         Zarr chunk size along time, in seconds (= rows because time is 1 Hz).
     write : bool, default True
@@ -770,13 +827,18 @@ def restructure_m2hats(
             nodes[group_path] = _stack_array_group(entries, sample_dim, instrument)
         else:
             nodes[group_path] = _stack_profile_group(entries, sample_dim, instrument)
+        nodes[group_path]["time"].attrs = {**nodes[group_path]["time"].attrs,
+                                           **time_attrs(1)}
 
     # Top-level attrs. Propagate source globals under `source_*` for traceability.
+    tilt_corrected = resolve_tilt_corrected(ds, tilt_corrected)
+    title_suffix, wind_sentence = wind_frame_text(tilt_corrected)
     root_attrs = {
-        "title": "M2HATS ISFS Surface Meteorology and Flux Products (restructured)",
+        "title": ("M2HATS ISFS High-Rate Surface Meteorology and Flux Products, "
+                  f"{title_suffix} (restructured)"),
         "summary": ("NCAR/EOL ISFS high-rate surface flux measurements from the "
                     "M2HATS campaign, restructured from flat ISFS variable naming "
-                    "(var_height_site) into a CF-compliant DataTree."),
+                    f"(var_height_site) into a CF-compliant DataTree. {wind_sentence}"),
         "source_dataset_doi": "10.26023/HW9Z-MF0D-NX04",
         "campaign": "M2HATS",
         "location": "Tonopah, Nevada, USA",
@@ -796,10 +858,15 @@ def restructure_m2hats(
     tree = xr.DataTree.from_dict({"/": root, **{f"/{k}": v for k, v in nodes.items()}})
 
     if write:
-        encoding = {}
-        for path, node in nodes.items():
-            for vname, e in _encoding_for(node, time_chunk_seconds).items():
-                encoding[f"/{path}/{vname}"] = e
+        # Align Dask chunks with the Zarr chunks (time chunked, other dims
+        # whole) so parallel writes never share a chunk.
+        nodes = {k: v.chunk({**{d: -1 for d in v.dims if d != "time"},
+                             "time": time_chunk_seconds})
+                 for k, v in nodes.items()}
+        tree = xr.DataTree.from_dict({"/": root, **{f"/{k}": v for k, v in nodes.items()}})
+        # DataTree.to_zarr takes encoding keyed by group path, then variable.
+        encoding = {f"/{path}": _encoding_for(node, time_chunk_seconds)
+                    for path, node in nodes.items()}
         tree.to_zarr(output_path, mode="w", consolidated=True, encoding=encoding)
     return tree
 
